@@ -1,0 +1,5 @@
+wish
+*.o
+*.tmp
+output
+output.txt
