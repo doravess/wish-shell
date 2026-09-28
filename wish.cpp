@@ -19,6 +19,33 @@ void init_paths() {
     paths.push_back("/bin");
 }
 
+bool handle_builtin(const std::vector<std::string> &tokens) {
+    if (tokens[0] == "exit") {
+        if (tokens.size() != 1) {
+            print_error();
+        } else {
+            exit(0);
+        }
+        return true;
+    } else if (tokens[0] == "cd") {
+        if (tokens.size() != 2) {
+            print_error();
+        } else {
+            if (chdir(tokens[1].c_str()) != 0) {
+                print_error();
+            }
+        }
+        return true;
+    } else if (tokens[0] == "path") {
+        paths.clear();
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            paths.push_back(tokens[i]);
+        }
+        return true;
+    }
+    return false;
+}
+
 int main(int argc, char *argv[]) {
     std::istream *input_stream = &std::cin;
     std::ifstream file_stream;
@@ -62,6 +89,10 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        if (handle_builtin(tokens)) {
+            continue;
+        }
+
         std::string executable;
         bool found = false;
 
@@ -79,7 +110,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        std::vector<char *> args;
+        std::vector<char*> args;
         for (auto &t : tokens) {
             args.push_back(&t[0]);
         }
@@ -96,6 +127,5 @@ int main(int argc, char *argv[]) {
             waitpid(pid, nullptr, 0);
         }
     }
-
     return 0;
 }
