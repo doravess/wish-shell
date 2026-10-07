@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <cstring>
+#include <fcntl.h>
 
 std::vector<std::string> paths;
 
@@ -20,6 +21,8 @@ void init_paths() {
 }
 
 bool handle_builtin(const std::vector<std::string> &tokens) {
+    if (tokens.empty()) return false;
+
     if (tokens[0] == "exit") {
         if (tokens.size() != 1) {
             print_error();
@@ -44,6 +47,31 @@ bool handle_builtin(const std::vector<std::string> &tokens) {
         return true;
     }
     return false;
+}
+
+std::vector<std::string> split_by_delim(const std::string &s, char delim) {
+    std::vector<std::string> result;
+    std::string current;
+    for (char ch : s) {
+        if (ch == delim) {
+            result.push_back(current);
+            current.clear();
+        } else {
+            current += ch;
+        }
+    }
+    result.push_back(current);
+    return result;
+}
+
+std::vector<std::string> tokenize(const std::string &s) {
+    std::stringstream ss(s);
+    std::string token;
+    std::vector<std::string> tokens;
+    while (ss >> token) {
+        tokens.push_back(token);
+    }
+    return tokens;
 }
 
 int main(int argc, char *argv[]) {
@@ -77,55 +105,95 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        std::stringstream ss(line);
-        std::string token;
-        std::vector<std::string> tokens;
+        std::vector<std::string> raw_cmds = split_by_delim(line, '&');
+        std::vector<pid_t> pids;
 
-        while (ss >> token) {
-            tokens.push_back(token);
-        }
+        for (const auto &raw_cmd : raw_cmds) {
+            size_t redirect_count = 0;
+            for (char ch : raw_cmd) {
+                if (ch == '>') redirect_count++;
+            }
 
-        if (tokens.empty()) {
-            continue;
-        }
+            if (redirect_count > 1) {
+                print_error();
+                continue;
+            }
 
-        if (handle_builtin(tokens)) {
-            continue;
-        }
+            std::string cmd_part = raw_cmd;
+            std::string output_file = "";
 
-        std::string executable;
-        bool found = false;
+            if (redirect_count == 1) {
+                std::vector<std::string> parts = split_by_delim(raw_cmd, '>');
+                cmd_part = parts[0];
+                std::vector<std::string> file_tokens = tokenize(parts[1]);
 
-        for (const auto &p : paths) {
-            std::string candidate = p + "/" + tokens[0];
-            if (access(candidate.c_str(), X_OK) == 0) {
-                executable = candidate;
-                found = true;
-                break;
+                if (file_tokens.size() != 1) {
+                    print_error();
+                    continue;
+                }
+                output_file = file_tokens[0];
+            }
+
+            std::vector<std::string> tokens = tokenize(cmd_part);
+            if (tokens.empty()) {
+                if (redirect_count == 1) {
+                    print_error();
+                }
+                continue;
+            }
+
+            if (handle_builtin(tokens)) {
+                continue;
+            }
+
+            std::string executable;
+            bool found = false;
+            for (const auto &p : paths) {
+                std::string candidate = p + "/" + tokens[0];
+                if (access(candidate.c_str(), X_OK) == 0) {
+                    executable = candidate;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                print_error();
+                continue;
+            }
+
+            std::vector<char*> args;
+            for (auto &t : tokens) {
+                args.push_back(&t[0]);
+            }
+            args.push_back(nullptr);
+
+            pid_t pid = fork();
+            if (pid < 0) {
+                print_error();
+            } else if (pid == 0) {
+                if (!output_file.empty()) {
+                    int fd = open(output_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                    if (fd < 0) {
+                        print_error();
+                        _exit(1);
+                    }
+                    dup2(fd, STDOUT_FILENO);
+                    dup2(fd, STDERR_FILENO);
+                    close(fd);
+                }
+                execv(executable.c_str(), args.data());
+                print_error();
+                _exit(1);
+            } else {
+                pids.push_back(pid);
             }
         }
 
-        if (!found) {
-            print_error();
-            continue;
-        }
-
-        std::vector<char*> args;
-        for (auto &t : tokens) {
-            args.push_back(&t[0]);
-        }
-        args.push_back(nullptr);
-
-        pid_t pid = fork();
-        if (pid < 0) {
-            print_error();
-        } else if (pid == 0) {
-            execv(executable.c_str(), args.data());
-            print_error();
-            _exit(1);
-        } else {
-            waitpid(pid, nullptr, 0);
+        for (pid_t p : pids) {
+            waitpid(p, nullptr, 0);
         }
     }
+
     return 0;
 }
